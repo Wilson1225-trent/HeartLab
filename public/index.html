@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HeartLab Live</title>
+<style>
+:root{--bg:#0b0f14;--card:#121923;--fg:#e6edf3;--mut:#8b98a5;--red:#ff4d5e;--grn:#3ddc84;--blu:#4da3ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;padding:10px}
+h1{font-size:18px;margin:0 0 8px}.row{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.card{background:var(--card);border-radius:12px;padding:10px}.card h2{font-size:12px;color:var(--mut);margin:0 0 6px;font-weight:600;text-transform:uppercase}
+canvas{width:100%;height:170px;display:block}#ecg{height:150px;background:#06120a;border-radius:8px}
+.big{font-size:64px;font-weight:700;color:var(--red);line-height:1}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.m b{display:block;font-size:20px}.m span{font-size:11px;color:var(--mut)}
+a,button{background:var(--blu);color:#000;border:0;border-radius:8px;padding:8px 12px;text-decoration:none;font-weight:600;font-size:14px;margin-right:6px}
+.flag{padding:6px 10px;border-radius:8px;background:#1d2a1d;color:var(--grn);font-size:13px}.warn{background:#3a1d1d;color:var(--red)}
+small{color:var(--mut)}
+</style></head><body>
+<h1>HeartLab Live <small id="conn">connecting…</small></h1>
+<div class="row">
+ <div class="card"><h2>Heart rate</h2><div class="big" id="hr">--</div><div class="flag" id="flag">waiting for data</div>
+  <div class="grid" style="margin-top:10px" id="m"></div></div>
+ <div class="card"><h2>Rhythm, vitals &amp; events (from watch)</h2><div class="flag" id="wst">--</div><div class="grid" style="margin-top:8px" id="vit"></div><div id="evl" style="margin-top:8px;font-size:12px;color:var(--mut);max-height:110px;overflow:auto"></div></div>
+ <div class="card"><h2>ECG-style beat strip (simulated from beat timing — NOT a real ECG)</h2><canvas id="ecg"></canvas></div>
+ <div class="card"><h2>Heart rate trend (bpm)</h2><canvas id="trend"></canvas></div>
+ <div class="card"><h2>RR tachogram (ms between beats)</h2><canvas id="rr"></canvas></div>
+ <div class="card"><h2>Poincaré plot (RRn vs RRn+1)</h2><canvas id="poin"></canvas></div>
+ <div class="card"><h2>Export</h2>
+  <a href="/export.csv">Download CSV</a><a href="/vitals.csv">Vitals CSV</a><a href="/events.csv">Events CSV</a><a href="/report.json">AI/doctor report (JSON)</a><br><br>
+  <small>Give the CSV/JSON to a clinician or an AI and ask for an interpretation. This is consumer-grade data, not a diagnosis.</small></div>
+</div>
+<script>
+let beats=[];
+const $=id=>document.getElementById(id);
+function cv(id){const c=$(id),r=devicePixelRatio||1;c.width=c.clientWidth*r;c.height=c.clientHeight*r;const g=c.getContext('2d');g.scale(r,r);g.clearRect(0,0,c.clientWidth,c.clientHeight);return[g,c.clientWidth,c.clientHeight]}
+function line(id,ys,col,grid){const[g,w,h]=cv(id);if(ys.length<2)return;const mn=Math.min(...ys)-2,mx=Math.max(...ys)+2;
+ g.strokeStyle='#223';g.lineWidth=1;for(let i=1;i<4;i++){g.beginPath();g.moveTo(0,h*i/4);g.lineTo(w,h*i/4);g.stroke()}
+ g.strokeStyle=col;g.lineWidth=2;g.beginPath();ys.forEach((y,i)=>{const X=w*i/(ys.length-1),Y=h-(h*(y-mn))/(mx-mn||1);i?g.lineTo(X,Y):g.moveTo(X,Y)});g.stroke();
+ g.fillStyle='#8b98a5';g.font='10px sans-serif';g.fillText(mx.toFixed(0),2,10);g.fillText(mn.toFixed(0),2,h-2)}
+function poincare(){const[g,w,h]=cv('poin');const r=beats.slice(-300).map(b=>b.rr);if(r.length<3)return;
+ const mn=Math.min(...r)-20,mx=Math.max(...r)+20,s=Math.min(w,h);
+ g.strokeStyle='#223';g.beginPath();g.moveTo(0,h);g.lineTo(h,0);g.stroke();
+ for(let i=1;i<r.length;i++){const x=(r[i-1]-mn)/(mx-mn)*(h-10)+5,y=h-5-(r[i]-mn)/(mx-mn)*(h-10);
+  g.fillStyle=Math.abs(r[i]-r[i-1])>0.2*r[i-1]?'#ff4d5e':'#4da3ff';g.beginPath();g.arc(x+(w-h)/2,y,2.5,0,7);g.fill()}}
+// Simulated PQRST template drawn at each real beat time (shape is generic, timing is real)
+function ecg(){const[g,w,h]=cv('ecg');const now=beats.length?beats[beats.length-1].t:Date.now(),span=8000,t0=now-span;
+ g.strokeStyle='#0f3a1c';for(let x=0;x<w;x+=w/16){g.beginPath();g.moveTo(x,0);g.lineTo(x,h);g.stroke()}
+ g.strokeStyle='#3ddc84';g.lineWidth=1.8;g.beginPath();const base=h*0.65;let first=true;
+ const pts=[];for(const b of beats.filter(b=>b.t>t0-800)){const x=(b.t-t0)/span*w,k=w/span*1000;
+  const seg=[[-.22,0],[-.17,-.07],[-.12,0],[-.04,0],[-.02,.1],[0,-1],[.03,.25],[.06,0],[.16,0],[.24,-.18],[.32,0]];
+  pts.push(...seg.map(([dx,dy])=>[x+dx*k*1.0,base+dy*h*0.55]));}
+ pts.sort((a,b)=>a[0]-b[0]);g.moveTo(0,base);pts.forEach(([x,y])=>g.lineTo(x,y));g.lineTo(w,base);g.stroke();}
+function draw(st){
+ line('trend',beats.slice(-300).map(b=>b.hr),'#ff4d5e');line('rr',beats.slice(-300).map(b=>b.rr),'#3ddc84');poincare();ecg();
+ if(st&&st.n>=5){const rows=[['Mean HR',st.meanHR],['Min/Max',st.minHR+'/'+st.maxHR],['Mean RR',st.meanRR+'ms'],['SDNN',st.sdnn],['RMSSD',st.rmssd],['pNN50',st.pnn50+'%'],['SD1',st.sd1],['SD2',st.sd2],['Irreg %',st.irregularPct]];
+  $('m').innerHTML=rows.map(([a,b])=>`<div class="m"><b>${b}</b><span>${a}</span></div>`).join('');
+  $('flag').textContent=st.flag;$('flag').className='flag'+(st.irregularPct>3?' warn':'')}}
+let evs=[];
+function side(d){
+ if(d.history)evs=d.ev||[];else if(d.ev)evs=evs.concat(d.ev).slice(-30);
+ const x=d.x||{},c=d.c||{};
+ if(x.status){$('wst').textContent='Watch: '+x.status;$('wst').className='flag'+(['IRREGULAR','SLOW','FAST@REST'].includes(x.status)?' warn':'')}
+ const f=(v,n=0)=>v==null?'--':(+v).toFixed(n);
+ const rows=[['SpO2',x.spo2>0?x.spo2+'%':'--'],['Temp C',f(x.temp,1)],['Steps',f(x.steps)],['Cal',f(x.cal)],['Alt m',f(x.alt)],['Motion',f(x.motion)],['Early',c.early??0],['Long/Pause',(c.long??0)+'/'+(c.pause??0)],['Irregular',c.irr??0]];
+ $('vit').innerHTML=rows.map(([a,b])=>`<div class="m"><b>${b}</b><span>${a}</span></div>`).join('');
+ $('evl').innerHTML=evs.slice().reverse().map(e=>new Date(e.t).toLocaleTimeString()+' &nbsp;<b style="color:#ff4d5e">'+e.k+'</b> '+e.v).join('<br>')||'no events yet'}
+const es=new EventSource('/stream');
+es.onopen=()=>$('conn').textContent='● live';es.onerror=()=>$('conn').textContent='reconnecting…';
+es.onmessage=e=>{const d=JSON.parse(e.data);if(d.history)beats=d.history;if(d.added)beats=beats.concat(d.added).slice(-600);
+ if(d.hr)$('hr').textContent=d.hr;else if(beats.length)$('hr').textContent=beats[beats.length-1].hr;side(d);draw(d.stats)};
+setInterval(ecg,100);addEventListener('resize',()=>draw());
+</script></body></html>
